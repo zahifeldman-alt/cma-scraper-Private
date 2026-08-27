@@ -107,7 +107,7 @@ async function generateCmaPrices(params) {
           document.querySelector('#uiBtnCalc')?.click();
         },
         premiumType, genderCode, birthDate, smoking, insuranceAmount, period
-      );
+      ).catch(() => {});
 
       await done;
 
