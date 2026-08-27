@@ -1,5 +1,6 @@
 import express from 'express';
-import puppeteer from 'puppeteer';
+import puppeteer from 'puppeteer-core';
+import chromium from '@sparticuz/chromium';
 import * as cheerio from 'cheerio';
 
 const app = express();
@@ -30,39 +31,28 @@ function birthDateFromAge(age) {
 }
 
 async function generateCmaPrices(params) {
-  const {
-    age,
-    gender,
-    smoking,
-    insuranceAmount,
-    period = 20,
-    premiumType = 84100001,
-  } = params;
+  const { age, gender, smoking, insuranceAmount, period = 20, premiumType = 84100001 } = params;
 
   const cacheKey = JSON.stringify({ age, gender, smoking, insuranceAmount, period, premiumType });
   const cached = resultCache.get(cacheKey);
-  if (cached && Date.now() - cached.at < CACHE_TTL) {
-    return cached.rows;
-  }
+  if (cached && Date.now() - cached.at < CACHE_TTL) return cached.rows;
 
   const birthDate = birthDateFromAge(age);
   const genderCode = gender === 'female' ? 84400002 : 84400001;
   let lastError = null;
 
   for (let attempt = 0; attempt < 2; attempt++) {
-    if (attempt > 0) {
-      await new Promise((r) => setTimeout(r, 3000));
-    }
+    if (attempt > 0) await new Promise((r) => setTimeout(r, 3000));
 
     const now = Date.now();
     const waitUntil = lastCmaRequestAt + CMA_REQUEST_INTERVAL;
-    if (now < waitUntil) {
-      await new Promise((r) => setTimeout(r, waitUntil - now));
-    }
+    if (now < waitUntil) await new Promise((r) => setTimeout(r, waitUntil - now));
 
     const browser = await puppeteer.launch({
-      headless: true,
-      args: ['--no-sandbox', '--disable-setuid-sandbox'],
+      args: chromium.args,
+      defaultViewport: chromium.defaultViewport,
+      executablePath: await chromium.executablePath(),
+      headless: chromium.headless,
     });
 
     try {
@@ -80,14 +70,9 @@ async function generateCmaPrices(params) {
               clearTimeout(timer);
               const status = res.status();
               resultHtml = await res.text();
-              if (!res.ok()) {
-                reject(new Error(`CMA returned ${status} - page not found`));
-                return;
-              }
+              if (!res.ok()) { reject(new Error(`CMA returned ${status}`)); return; }
               resolve();
-            } catch (e) {
-              reject(new Error('Failed to read CMA response: ' + e.message));
-            }
+            } catch (e) { reject(new Error('Failed to read CMA response: ' + e.message)); }
           }
         });
       });
@@ -101,7 +86,6 @@ async function generateCmaPrices(params) {
             p.set('DesiredSum', desiredSum);
             p.set('DesiredPeriod', desiredPeriod);
           }
-
           const $ = window.$ || window.jQuery;
           if ($) {
             const setNumeric = (selector, value) => {
@@ -114,7 +98,6 @@ async function generateCmaPrices(params) {
             setNumeric('#uiLDesiredSum', desiredSum);
             setNumeric('#uiLDesiredPeriod', desiredPeriod);
           }
-
           const insured = p?.ListOfInsured?.[0];
           if (insured) {
             insured.set('BirthDate', d);
@@ -123,12 +106,7 @@ async function generateCmaPrices(params) {
           }
           document.querySelector('#uiBtnCalc')?.click();
         },
-        premiumType,
-        genderCode,
-        birthDate,
-        smoking,
-        insuranceAmount,
-        period
+        premiumType, genderCode, birthDate, smoking, insuranceAmount, period
       );
 
       await done;
@@ -151,7 +129,6 @@ async function generateCmaPrices(params) {
         lastCmaRequestAt = Date.now();
         return rows;
       }
-
       lastError = new Error('CMA returned no results');
     } catch (err) {
       lastError = err;
@@ -160,16 +137,13 @@ async function generateCmaPrices(params) {
       await browser.close();
     }
   }
-
   throw lastError || new Error('CMA fetch failed after retries');
 }
 
 app.post('/api/cma', async (req, res) => {
   try {
     const { age, gender, smoking, insuranceAmount, period } = req.body;
-    if (!age || !insuranceAmount) {
-      return res.status(400).json({ error: 'חסרים פרמטרים (age, insuranceAmount)' });
-    }
+    if (!age || !insuranceAmount) return res.status(400).json({ error: 'חסרים פרמטרים' });
     const rows = await generateCmaPrices({ age, gender, smoking, insuranceAmount, period });
     res.json({ rows });
   } catch (error) {
