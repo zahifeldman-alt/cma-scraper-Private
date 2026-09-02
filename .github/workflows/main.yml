@@ -1,9 +1,4 @@
-name: Run My Command
-on: [push]
-jobs:
-  execute-script:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - name: Run a shell command
-        run: echo "Hello, GitHub Actions!"
+cd src/scraper
+git add package.json server.js
+git commit -m "מעבר ל-puppeteer-core ו-@sparticuz/chromium"
+git push origin main
