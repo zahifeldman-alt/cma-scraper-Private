@@ -1,0 +1,9 @@
+name: Run My Command
+on: [push]
+jobs:
+  execute-script:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Run a shell command
+        run: echo "Hello, GitHub Actions!"
