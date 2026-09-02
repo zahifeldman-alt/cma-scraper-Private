@@ -16,10 +16,8 @@ function formatNIS(value) {
   const n = typeof value === 'number' ? value : parseFloat(value || '');
   if (Number.isNaN(n)) return '';
   return new Intl.NumberFormat('he-IL', {
-    style: 'currency',
-    currency: 'ILS',
-    minimumFractionDigits: 2,
-    maximumFractionDigits: 2,
+    style: 'currency', currency: 'ILS',
+    minimumFractionDigits: 2, maximumFractionDigits: 2,
   }).format(n);
 }
 
@@ -30,9 +28,17 @@ function birthDateFromAge(age) {
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
 }
 
+async function launchBrowser() {
+  return puppeteer.launch({
+    args: [...chromium.args, '--disable-blink-features=AutomationControlled', '--no-sandbox'],
+    defaultViewport: { width: 1366, height: 768 },
+    executablePath: await chromium.executablePath(),
+    headless: chromium.headless,
+  });
+}
+
 async function generateCmaPrices(params) {
   const { age, gender, smoking, insuranceAmount, period = 20, premiumType = 84100001 } = params;
-
   const cacheKey = JSON.stringify({ age, gender, smoking, insuranceAmount, period, premiumType });
   const cached = resultCache.get(cacheKey);
   if (cached && Date.now() - cached.at < CACHE_TTL) return cached.rows;
@@ -43,26 +49,20 @@ async function generateCmaPrices(params) {
 
   for (let attempt = 0; attempt < 2; attempt++) {
     if (attempt > 0) await new Promise((r) => setTimeout(r, 3000));
-
     const now = Date.now();
     const waitUntil = lastCmaRequestAt + CMA_REQUEST_INTERVAL;
     if (now < waitUntil) await new Promise((r) => setTimeout(r, waitUntil - now));
 
-    const browser = await puppeteer.launch({
-      args: chromium.args,
-      defaultViewport: chromium.defaultViewport,
-      executablePath: await chromium.executablePath(),
-      headless: chromium.headless,
-    });
-
+    const browser = await launchBrowser();
     try {
       const page = await browser.newPage();
-      await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36');
+      await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/127.0.0.0 Safari/537.36');
       await page.goto(CMA_URL, { waitUntil: 'networkidle2', timeout: 60000 });
+      await page.waitForSelector('#uiBtnCalc', { visible: true, timeout: 15000 }).catch(() => {});
 
       let resultHtml = '';
       const done = new Promise((resolve, reject) => {
-        const timer = setTimeout(() => reject(new Error('CMA request timeout')), 40000);
+        const timer = setTimeout(() => reject(new Error('CMA request timeout')), 30000);
         page.on('response', async (res) => {
           const request = res.request();
           if (request.url().includes('CalculateRiskRates') && request.method() === 'POST') {
@@ -139,6 +139,34 @@ async function generateCmaPrices(params) {
   }
   throw lastError || new Error('CMA fetch failed after retries');
 }
+
+// DEBUG endpoint
+app.get('/api/debug', async (req, res) => {
+  const browser = await launchBrowser();
+  try {
+    const page = await browser.newPage();
+    await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/127.0.0.0 Safari/537.36');
+    const resp = await page.goto(CMA_URL, { waitUntil: 'networkidle2', timeout: 60000 });
+    const status = resp?.status();
+    const title = await page.title().catch(() => '');
+    const url = page.url();
+    const diag = await page.evaluate(() => {
+      return {
+        hasJQuery: !!window.$ || !!window.jQuery,
+        hasParametersModel: !!window.ParametersModel,
+        hasCalcBtn: !!document.querySelector('#uiBtnCalc'),
+        hasDesiredSum: !!document.querySelector('#uiLDesiredSum'),
+        hasDesiredPeriod: !!document.querySelector('#uiLDesiredPeriod'),
+        bodyTextSnippet: (document.body?.innerText || '').slice(0, 500),
+      };
+    }).catch((e) => ({ evalError: e.message }));
+    return res.json({ status, title, url, diag });
+  } catch (e) {
+    return res.status(500).json({ error: e.message });
+  } finally {
+    await browser.close();
+  }
+});
 
 app.post('/api/cma', async (req, res) => {
   try {
